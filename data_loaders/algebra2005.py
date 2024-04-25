@@ -7,11 +7,18 @@ import pandas as pd
 
 from torch.utils.data import Dataset
 
-from models.utils import match_seq_len
-
+from models.utils import match_seq_len, data_masks, match_seq_len_time
+from datetime import datetime
 
 DATASET_DIR = "datasets/algebra_2005_2006/"
 
+
+def change2timestamp(t, hasf=True):
+    if hasf:
+        timeStamp = datetime.strptime(t, "%Y-%m-%d %H:%M:%S.%f").timestamp() * 1000
+    else:
+        timeStamp = datetime.strptime(t, "%Y-%m-%d %H:%M:%S").timestamp() * 1000
+    return int(timeStamp)
 
 class Algebra2005(Dataset):
     def __init__(self, seq_len, datset_dir=DATASET_DIR) -> None:
@@ -37,43 +44,51 @@ class Algebra2005(Dataset):
                 self.q2idx = pickle.load(f)
             with open(os.path.join(self.dataset_dir, "u2idx.pkl"), "rb") as f:
                 self.u2idx = pickle.load(f)
+            with open(os.path.join(self.dataset_dir, "time_seqs.pkl"), "rb") as f:
+                self.time_seqs = pickle.load(f)
 
         else:
             self.q_seqs, self.r_seqs, self.q_list, self.u_list, self.q2idx, \
-                self.u2idx = self.preprocess()
+                self.u2idx , self.time_seqs = self.preprocess()
 
         self.num_u = self.u_list.shape[0]
         self.num_q = self.q_list.shape[0]
 
         if self.seq_len:
-            self.q_seqs, self.r_seqs = \
-                match_seq_len(self.q_seqs, self.r_seqs, self.seq_len)
+            # self.q_seqs, self.r_seqs  = \
+            #     match_seq_len(self.q_seqs, self.r_seqs, self.seq_len)
+            self.q_seqs, self.r_seqs, self.time_seqs  = \
+                match_seq_len_time(self.q_seqs, self.r_seqs, self.time_seqs, self.seq_len)
 
         self.len = len(self.q_seqs)
 
     def __getitem__(self, index):
-        return self.q_seqs[index], self.r_seqs[index]
+        return self.q_seqs[index], self.r_seqs[index], self.time_seqs[index]
 
     def __len__(self):
         return self.len
 
     def preprocess(self):
         df = pd.read_csv(self.dataset_path, sep="\t")\
-            .dropna(subset=["KC(Default)"]).sort_values(by=["Step Start Time"])
+            .dropna(subset=["Problem Name", "First Transaction Time", "Correct First Attempt"]).sort_values(by=["Step Start Time"])
+        df['Correct First Attempt'] = df['Correct First Attempt'].apply(int)   
+        df['start_timestamp'] = df["First Transaction Time"].apply(lambda x:change2timestamp(x,hasf='.' in x))
 
         u_list = np.unique(df["Anon Student Id"].values)
-        q_list = np.unique(df["KC(Default)"].values)
+        q_list = np.unique(df["Problem Name"].values)
 
         u2idx = {u: idx for idx, u in enumerate(u_list)}
         q2idx = {q: idx for idx, q in enumerate(q_list)}
 
         q_seqs = []
         r_seqs = []
+        time_seqs = []
         for u in u_list:
             u_df = df[df["Anon Student Id"] == u]
 
-            q_seqs.append([q2idx[q] for q in u_df["KC(Default)"].values])
+            q_seqs.append([q2idx[q] for q in u_df["Problem Name"].values])
             r_seqs.append(u_df["Correct First Attempt"].values)
+            time_seqs.append(u_df["start_timestamp"].values)
 
         with open(os.path.join(self.dataset_dir, "q_seqs.pkl"), "wb") as f:
             pickle.dump(q_seqs, f)
@@ -87,5 +102,7 @@ class Algebra2005(Dataset):
             pickle.dump(q2idx, f)
         with open(os.path.join(self.dataset_dir, "u2idx.pkl"), "wb") as f:
             pickle.dump(u2idx, f)
+        with open(os.path.join(self.dataset_dir, "time_seqs.pkl"), "wb") as f:
+            pickle.dump(time_seqs, f)
 
-        return q_seqs, r_seqs, q_list, u_list, q2idx, u2idx
+        return q_seqs, r_seqs, q_list, u_list, q2idx, u2idx, time_seqs
